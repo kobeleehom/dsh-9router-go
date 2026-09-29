@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { chmod, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
+import { chmod, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { arch, platform } from 'node:os'
 import { join } from 'node:path'
 import { Readable, Transform } from 'node:stream'
@@ -141,68 +141,6 @@ export async function installProxy(rootDir, { fetcher = fetch, os = platform(), 
     return target
   } finally {
     await rm(staging, { recursive: true, force: true })
-  }
-}
-
-/**
- * Install the Node packages the proxy's captcha solver imports.
- *
- * The binary embeds `solver.js` but not its dependencies, so a machine without
- * them starts and then fails every request at mint time. The install is skipped
- * when the packages are already present, and it is the only step that needs the
- * network besides the binary download.
- * @param options - solver directory, npm runner, and deadline.
- * @returns whether packages were installed by this call.
- * @throws when npm exits non-zero, so the failure is reported before a request
- *   fails for the more confusing reason.
- */
-export async function installSolverDependencies({
-  solverDir, nodePath, npmCliPath, exists, runNpm, timeoutMs = 300000, log = console,
-}) {
-  const marker = join(solverDir, 'node_modules', 'happy-dom', 'package.json')
-  if (await exists(marker)) return { installed: false }
-  if (await exists(join(solverDir, 'node_modules'))) {
-    // A partial tree from an interrupted install: remove it so npm cannot
-    // report success against an incomplete set of packages.
-    await rm(join(solverDir, 'node_modules'), { recursive: true, force: true })
-  }
-  const packageJson = join(solverDir, 'package.json')
-  if (!await exists(packageJson)) {
-    throw new Error(`zcode proxy solver directory ${solverDir} has no package.json; the binary may not have unpacked it yet`)
-  }
-  log.info?.('zcode: installing captcha solver dependencies (one time)')
-  const code = await runNpm({
-    nodePath,
-    npmCliPath,
-    args: ['install', '--no-audit', '--no-fund', '--loglevel=error'],
-    cwd: solverDir,
-    timeoutMs,
-  })
-  if (code !== 0) {
-    throw new Error(
-      `zcode: npm install for the captcha solver exited with code ${code}. `
-      + 'The proxy needs Node.js on PATH and network access to the npm registry.',
-    )
-  }
-  if (!await exists(marker)) {
-    throw new Error('zcode: npm reported success but the solver dependencies are still missing')
-  }
-  return { installed: true }
-}
-
-/** Read the solver directory the proxy unpacks next to its data. */
-export async function solverDirectory(rootDir) {
-  return join(rootDir, 'data', 'captcha_node')
-}
-
-/** Whether a file exists, used to keep the install steps idempotent. */
-export async function fileExists(path) {
-  try {
-    await stat(path)
-    return true
-  } catch (error) {
-    if (error.code === 'ENOENT') return false
-    throw error
   }
 }
 

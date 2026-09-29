@@ -19,42 +19,13 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import {
-  fileExists, installProxy, installSolverDependencies, proxyBinaryPath, solverDirectory,
-} from './zcode-release.mjs'
+import { installProxy, proxyBinaryPath } from './zcode-release.mjs'
 
 /** Readiness probe; the proxy answers this without authentication. */
 const HEALTH_PATH = '/api/health'
-
-/**
- * Run `npm install` in a directory and resolve to its exit code.
- *
- * The Desktop application ships its own Node and npm, and that pair is what a
- * managed install should use: a PATH npm may belong to a different Node than
- * the one the solver will run under. `npmCliPath` names that npm's entry script
- * when the caller knows it.
- * @param options - node and npm entry points, arguments, working directory, deadline.
- * @returns the npm exit code, or a non-zero code when the runner cannot start.
- */
-function defaultRunNpm({ nodePath, npmCliPath, args, cwd, timeoutMs }) {
-  return new Promise(resolveCode => {
-    const command = npmCliPath === undefined ? 'npm' : nodePath
-    const argv = npmCliPath === undefined ? args : [npmCliPath, ...args]
-    let child
-    try {
-      child = spawn(command, argv, { cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-    } catch {
-      resolveCode(127)
-      return
-    }
-    const timer = setTimeout(() => child.kill(), timeoutMs)
-    child.on('error', () => { clearTimeout(timer); resolveCode(127) })
-    child.on('exit', code => { clearTimeout(timer); resolveCode(code ?? 1) })
-  })
-}
 
 /**
  * Validate the ZCode proxy options before any external code runs.
@@ -117,17 +88,9 @@ export function resolveZcodeOptions(input = {}, fallbackRoot) {
     || models.some(model => typeof model !== 'string' || model.length === 0)) {
     throw new Error('zcode.models must be a non-empty list of model ids')
   }
-  // How long to wait for the bundled solver packages to appear. The proxy
-  // unpacks them in about ten seconds, but a cold start on a busy or scanned
-  // disk is slower, and giving up early is what turned a slow start into a
-  // failed one.
-  const solverReadyTimeoutMs = input.solverReadyTimeoutMs ?? 90000
-  if (!Number.isInteger(solverReadyTimeoutMs) || solverReadyTimeoutMs < 1000 || solverReadyTimeoutMs > 600000) {
-    throw new Error('zcode.solverReadyTimeoutMs must be 1000..600000')
-  }
   return {
     enabled, port, startupTimeoutMs, captchaTimeout, authToken, legacyAuthTokens,
-    routePrefix, routeName, models, autoInstall, solverReadyTimeoutMs,
+    routePrefix, routeName, models, autoInstall,
     rootDir: resolve(rootDir), executable: input.executable,
     nodePath: input.nodePath, seedToken: input.seedToken,
   }
@@ -147,19 +110,14 @@ export class ZcodeController {
   /**
    * @param options - validated `resolveZcodeOptions` output.
    * @param subprocess - the DSH subprocess seam (`ctx.subprocess`).
-   * @param args - optional logger, fetcher, and npm runner overrides.
+   * @param args - optional logger, fetcher, and spawn overrides.
    */
-  constructor(options, subprocess, {
-    log = console, fetcher = fetch, npmCliPath, runNpm, solverInstallTimeoutMs = 300000, spawnProcess = spawn,
-  } = {}) {
+  constructor(options, subprocess, { log = console, fetcher = fetch, spawnProcess = spawn } = {}) {
     this.options = options
     this.subprocess = subprocess
     this.log = log
     this.fetcher = fetcher
-    this.npmCliPath = npmCliPath
-    this.runNpm = runNpm ?? defaultRunNpm
     this.spawnProcess = spawnProcess
-    this.options.solverInstallTimeoutMs = solverInstallTimeoutMs
     this.endpoint = `http://127.0.0.1:${options.port}`
   }
 
@@ -179,36 +137,15 @@ export class ZcodeController {
   async initialize() {
     if (await this.#healthy()) {
       this.log.info?.(`zcode: reusing proxy already listening at ${this.endpoint}`)
-      // A reused proxy may have been started outside this plugin, or before a
-      // dependency fix, so the same check runs on both paths.
-      await this.#ensureSolverDependencies()
       await this.syncCredentials()
       return
     }
     const binary = await this.#resolveBinary()
     await this.#writeEnv()
     await this.#writeSeedToken()
-    await this.#clearInterruptedUnpack()
     await this.#launch(binary)
     await this.#awaitReady()
-    // The published release embeds the solver's packages, so this normally
-    // finds them unpacked within seconds; it installs only when a build omits
-    // them. No restart follows: the proxy spawns `node solver.js` per solve, so
-    // packages added later are picked up by the next request.
-    await this.#ensureSolverDependencies()
     await this.syncCredentials()
-  }
-
-  /**
-   * Remove the unpack staging a previous run left behind.
-   *
-   * The proxy extracts the solver into `captcha_node.tmp` and renames it once
-   * complete, so an interrupted run leaves that directory where the next launch
-   * would extract over it.
-   */
-  async #clearInterruptedUnpack() {
-    const staging = join(this.options.rootDir, 'data', 'captcha_node.tmp')
-    await rm(staging, { recursive: true, force: true })
   }
 
   /**
@@ -303,48 +240,6 @@ export class ZcodeController {
     const installed = await installProxy(this.options.rootDir, { fetcher: this.fetcher })
     this.log.info?.(`zcode: installed proxy at ${installed}`)
     return installed
-  }
-
-  /**
-   * Make sure the captcha solver's Node packages are present.
-   *
-   * The published release embeds them, so the normal path is a short wait for
-   * the proxy to finish unpacking: `node_modules/happy-dom` is the marker,
-   * because that package is what the solver's browser emulation imports. The
-   * `npm install` below is a fallback for a build that omits them, and it is
-   * deliberately non-fatal — a proxy without a working solver still serves its
-   * dashboard, and failing here would discard the gateway's other providers.
-   *
-   * The unpack takes about ten seconds on a cold start (the proxy extracts to
-   * `captcha_node.tmp` and renames), and longer while a virus scanner inspects
-   * the freshly downloaded 25 MB binary, so the deadline is generous.
-   * @returns whether packages had to be installed.
-   * @throws when a fallback install is attempted and fails.
-   */
-  async #ensureSolverDependencies() {
-    const solverDir = await solverDirectory(this.options.rootDir)
-    const marker = join(solverDir, 'node_modules', 'happy-dom', 'package.json')
-    if (await this.#awaitSolverPackages(marker)) return { installed: false }
-    this.log.warn?.('zcode: the proxy did not unpack its solver packages; attempting an npm install')
-    return installSolverDependencies({
-      solverDir,
-      nodePath: this.options.nodePath ?? 'node',
-      npmCliPath: this.npmCliPath,
-      exists: fileExists,
-      runNpm: this.runNpm,
-      timeoutMs: this.options.solverInstallTimeoutMs,
-      log: this.log,
-    })
-  }
-
-  /** Poll for the solver's marker file until the deadline. */
-  async #awaitSolverPackages(marker) {
-    const deadline = Date.now() + this.options.solverReadyTimeoutMs
-    while (Date.now() < deadline) {
-      if (await fileExists(marker)) return true
-      await delay(500)
-    }
-    return false
   }
 
   /**

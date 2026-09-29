@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import {
-  installProxy, installSolverDependencies, proxyAssetName, proxyBinaryPath, proxyRelease,
+  installProxy, proxyAssetName, proxyBinaryPath, proxyRelease,
 } from '../src/zcode-release.mjs'
 
 const DIGEST = 'a'.repeat(64)
@@ -46,16 +46,7 @@ async function scratch() {
   return mkdtemp(join(tmpdir(), 'zcode-release-'))
 }
 
-/** File-existence probe matching the shape `installSolverDependencies` expects. */
-async function exists(path) {
-  const { stat } = await import('node:fs/promises')
-  try {
-    await stat(path)
-    return true
-  } catch {
-    return false
-  }
-}
+
 
 test('proxyAssetName maps the platforms the release publishes', () => {
   assert.equal(proxyAssetName('win32', 'x64'), 'zcode2api-windows-amd64.exe')
@@ -146,67 +137,4 @@ test('installProxy leaves no staged directory behind on failure', async () => {
   await assert.rejects(() => installProxy(root, { fetcher, os: 'win32', cpu: 'x64' }), /download failed/)
   const { readdir } = await import('node:fs/promises')
   assert.deepEqual(await readdir(root), [], 'staging is cleaned up')
-})
-
-test('installSolverDependencies skips an install when the packages are present', async () => {
-  const dir = await scratch()
-  await mkdir(join(dir, 'node_modules', 'happy-dom'), { recursive: true })
-  await writeFile(join(dir, 'node_modules', 'happy-dom', 'package.json'), '{}')
-  let ran = false
-  const result = await installSolverDependencies({
-    solverDir: dir,
-    exists,
-    runNpm: async () => { ran = true; return 0 },
-  })
-  assert.equal(result.installed, false)
-  assert.equal(ran, false)
-})
-
-test('installSolverDependencies installs into a directory the proxy unpacked', async () => {
-  const dir = await scratch()
-  await writeFile(join(dir, 'package.json'), JSON.stringify({ dependencies: { 'happy-dom': '^20' } }))
-  let seen
-  const result = await installSolverDependencies({
-    solverDir: dir,
-    nodePath: 'node',
-    exists,
-    runNpm: async options => {
-      seen = options
-      await mkdir(join(dir, 'node_modules', 'happy-dom'), { recursive: true })
-      await writeFile(join(dir, 'node_modules', 'happy-dom', 'package.json'), '{}')
-      return 0
-    },
-  })
-  assert.equal(result.installed, true)
-  assert.equal(seen.cwd, dir)
-  assert.ok(seen.args.includes('install'))
-})
-
-test('installSolverDependencies reports npm exiting non-zero', async () => {
-  const dir = await scratch()
-  await writeFile(join(dir, 'package.json'), '{}')
-  await assert.rejects(() => installSolverDependencies({
-    solverDir: dir,
-    exists,
-    runNpm: async () => 1,
-  }), /exited with code 1/)
-})
-
-test('installSolverDependencies reports a solver directory with no package.json', async () => {
-  const dir = await scratch()
-  await assert.rejects(() => installSolverDependencies({
-    solverDir: dir,
-    exists,
-    runNpm: async () => 0,
-  }), /no package.json/)
-})
-
-test('installSolverDependencies fails when npm claims success but packages are absent', async () => {
-  const dir = await scratch()
-  await writeFile(join(dir, 'package.json'), '{}')
-  await assert.rejects(() => installSolverDependencies({
-    solverDir: dir,
-    exists,
-    runNpm: async () => 0,
-  }), /still missing/)
 })
