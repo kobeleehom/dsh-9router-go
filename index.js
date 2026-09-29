@@ -30,6 +30,10 @@ export async function apply(ctx, config = {}) {
   const zcodeController = zcode.enabled
     ? new ZcodeController(zcode, ctx.subprocess, { log: ctx.logger })
     : undefined
+  // Whether the optional proxy is actually serving. A proxy failure is logged
+  // and survived: the gateway is the DSH-facing service, and a third-party
+  // binary that cannot start must not cost the deployment its other providers.
+  const zcodeState = { ready: false }
   await ctx.effect(async () => {
     if (zcodeController !== undefined) {
       // Fail soft on a missing account: the proxy is still useful with an
@@ -41,7 +45,13 @@ export async function apply(ctx, config = {}) {
       } catch (error) {
         ctx.logger.warn(`zcode: could not read the stored ZCode account: ${error.message}`)
       }
-      await zcodeController.initialize()
+      try {
+        await zcodeController.initialize()
+        zcodeState.ready = true
+      } catch (error) {
+        ctx.logger.warn(`zcode: proxy unavailable, continuing without it: ${error.message}`)
+        await zcodeController.close().catch(() => {})
+      }
     }
     try {
       await controller.initialize()
@@ -53,7 +63,7 @@ export async function apply(ctx, config = {}) {
     try {
       unprovide = ctx.provide('nineRouterGo', controller)
       ctx.logger.info(`9router-go ${controller.version} ready at ${controller.endpoint}`)
-      if (zcodeController !== undefined) {
+      if (zcodeState.ready) {
         ctx.provide('zcodeProxy', zcodeController)
         ctx.logger.info(`zcode proxy ready at ${zcodeController.endpoint}`)
       }
@@ -65,7 +75,7 @@ export async function apply(ctx, config = {}) {
     return async () => {
       unprovide()
       await controller.close()
-      await zcodeController?.close()
+      if (zcodeState.ready) await zcodeController?.close()
     }
   }, '9router-go: managed sidecar')
   if (options.provider.autoInject) {
@@ -73,10 +83,15 @@ export async function apply(ctx, config = {}) {
     // be provisioned, and the injection scope keeps services a composition may
     // lack from gating the sidecar's own activation.
     ctx.inject(['settings', 'credentials', 'llm'], (scope) => {
-      void provisionRoutes({ scope, controller, zcodeController, zcode, provider: options.provider })
-        .catch((error) => {
-          scope.logger.warn(`9router-go: automatic model route injection failed: ${error.message}`)
-        })
+      void provisionRoutes({
+        scope,
+        controller,
+        zcodeController: zcodeState.ready ? zcodeController : undefined,
+        zcode,
+        provider: options.provider,
+      }).catch((error) => {
+        scope.logger.warn(`9router-go: automatic model route injection failed: ${error.message}`)
+      })
     })
   }
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -91,6 +91,49 @@ test('refuses an already owned directory and never starts another process', asyn
   first = new RouterController(options, provider, { fetcher })
   await first.initialize()
   const second = new RouterController(options, provider, { fetcher })
-  await assert.rejects(second.initialize(), /owned by another process/)
+  await assert.rejects(second.initialize(), /owned by live process \d+/)
   assert.equal(provider.calls.length, 1)
+})
+
+/**
+ * A host killed rather than closed leaves the lease behind. Refusing forever
+ * made the plugin unrecoverable without manual cleanup, so a lease whose
+ * recorded owner is gone is reclaimed instead.
+ */
+test('reclaims a lease whose owning process no longer exists', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-9router-go-'))
+  const lock = join(root, '.dsh-owner')
+  await mkdir(lock, { recursive: true })
+  // A pid this high is not in use, so the recorded owner reads as dead.
+  await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: 2147483646 }))
+  const provider = processProvider()
+  let probes = 0
+  const fetcher = async () => {
+    if (++probes % 2 === 1) throw Error('connection refused')
+    return new Response('{"status":"ok"}')
+  }
+  const controller = new RouterController(
+    resolveOptions({ rootDir: root, executable: process.execPath }, root), provider, { fetcher },
+  )
+  // One hook, so the process is closed before its directory is removed.
+  t.after(async () => { await controller.close(); await rm(root, { recursive: true, force: true }) })
+  await controller.initialize()
+  assert.equal(provider.calls.length, 1, 'the gateway starts once the stale lease is reclaimed')
+})
+
+/**
+ * A lease written before ownership records existed carries no pid, so the only
+ * evidence of a live owner is a gateway actually answering on the port.
+ */
+test('keeps a pid-less lease while a gateway answers on the port', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-9router-go-'))
+  t.after(async () => { await rm(root, { recursive: true, force: true }) })
+  await mkdir(join(root, '.dsh-owner'), { recursive: true })
+  const provider = processProvider()
+  const fetcher = async () => new Response('{"status":"ok"}')
+  const controller = new RouterController(
+    resolveOptions({ rootDir: root, executable: process.execPath }, root), provider, { fetcher },
+  )
+  await assert.rejects(controller.initialize(), /already serving/)
+  assert.equal(provider.calls.length, 0, 'no second gateway is started')
 })

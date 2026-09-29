@@ -1,0 +1,19 @@
+fix: reclaim a stale lease and survive a failed ZCode proxy
+
+A host killed rather than closed left the `.dsh-owner` lease behind, and the
+plugin then refused to start forever with no way back short of manual cleanup.
+The lease now records the owning pid, and a lease whose owner is gone is
+reclaimed; a lease held by a live process still refuses, and a pid-less lease
+is reclaimed only when nothing answers the gateway's health check. Closing is
+also tolerant of a lease that already disappeared.
+
+The optional ZCode proxy is now fail-soft. Its initialisation used to throw
+into the sidecar effect, so a proxy that could not download, install or start
+took the whole gateway down with it and the deployment lost every other
+provider. A proxy failure is logged, the gateway starts regardless, and the
+provider registration is skipped so the catalog never advertises a route that
+is not being served.
+
+Both defects were observed in the field: a force-killed host stopped the
+gateway from starting at all, and the proxy's failure mode was reachable
+whenever its one-time download or npm install could not complete.

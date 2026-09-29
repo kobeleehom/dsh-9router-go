@@ -5,6 +5,25 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { assetName, currentVersion, installRelease, installedBinary, latestRelease } from './release.mjs'
 
+/**
+ * Whether a process id is still running.
+ *
+ * Signal 0 performs the permission and existence check without delivering
+ * anything. `EPERM` still means the process exists; it simply belongs to
+ * another user, which for lease-holding purposes is "alive".
+ * @param pid - the process id recorded in the lease.
+ * @returns true when the process exists.
+ */
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === 'EPERM'
+  }
+}
+
 /** Validate deployment-specific values before starting any external code. */
 export function resolveOptions(config = {}, profileHome) {
   const port = config.port ?? 20130
@@ -146,16 +165,80 @@ export class RouterController {
     return result
   }
 
+  /**
+   * Take the exclusive lease on the data directory, reclaiming a stale one.
+   *
+   * The lease is a directory, and a host that was killed rather than closed
+   * leaves it behind — which used to make every later launch refuse to start
+   * even though nothing held the directory. The owner's pid is therefore
+   * recorded, and a lock whose owner is gone is reclaimed. Reclaiming is the
+   * risky direction, so anything ambiguous (a live pid) refuses to start.
+   * @returns the lock directory now owned by this process.
+   * @throws when another live instance owns the directory.
+   */
+  async #acquireLock() {
+    const lock = join(this.options.rootDir, '.dsh-owner')
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await mkdir(lock)
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error
+        await this.#clearStaleLock(lock)
+        continue
+      }
+      try {
+        await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid }) + '\n', { mode: 0o600 })
+      } catch (error) {
+        // Ownership is still exclusive without a pid record; a later launch
+        // then falls back to the port probe below instead of reclaiming blindly.
+        this.log.warn?.(`9router-go could not record lock ownership: ${error.message}`)
+      }
+      return lock
+    }
+    throw new Error(`9router-go data directory is locked by a running instance: ${lock}`)
+  }
+
+  /** Remove a lock only when its recorded owner is gone and nothing is serving. */
+  async #clearStaleLock(lock) {
+    let owner
+    try {
+      owner = JSON.parse(await readFile(join(lock, 'owner.json'), 'utf8'))
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+    if (owner?.pid !== undefined) {
+      if (processAlive(owner.pid)) {
+        throw new Error(`9router-go data directory is owned by live process ${owner.pid}: ${lock}`)
+      }
+      this.log.warn?.(`9router-go reclaimed a stale lock left by process ${owner.pid}`)
+      await rm(lock, { recursive: true, force: true })
+      return
+    }
+    // A lock written before ownership records existed, or one whose record
+    // failed to write: only a gateway actually answering proves it is in use.
+    if (await this.#gatewayServing()) {
+      throw new Error(`9router-go data directory is owned by a gateway already serving ${this.endpoint}`)
+    }
+    this.log.warn?.('9router-go reclaimed a lock whose owner could not be identified')
+    await rm(lock, { recursive: true, force: true })
+  }
+
+  /** Whether some process currently answers this gateway's health check. */
+  async #gatewayServing() {
+    try {
+      const response = await this.fetcher(`${this.endpoint}/health`, { signal: AbortSignal.timeout(1000) })
+      if (!response.ok) return false
+      const value = await response.json()
+      return value?.status === 'ok'
+    } catch {
+      // Unreachable is the expected answer when no gateway is running.
+      return false
+    }
+  }
+
   async initialize() {
     await mkdir(this.options.rootDir, { recursive: true, mode: 0o700 })
-    const lock = join(this.options.rootDir, '.dsh-owner')
-    try {
-      await mkdir(lock)
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error
-      throw new Error(`9router-go data directory is owned by another process (or stale lock): ${lock}`)
-    }
-    this.#lock = lock
+    this.#lock = await this.#acquireLock()
     try {
       await this.#exclusive(async () => {
         let executable = this.options.executable
@@ -313,7 +396,9 @@ export class RouterController {
     await this.#operation
     await this.#stop()
     if (this.#lock) {
-      await rm(this.#lock, { recursive: true })
+      // `force` because a lease this process already reclaimed or that an
+      // operator removed is not a teardown failure.
+      await rm(this.#lock, { recursive: true, force: true })
       this.#lock = undefined
     }
   }
