@@ -20,3 +20,35 @@
           maxModels: 40
           inputModalities:
             - text
+        # Managed ZCode proxy. It republishes a ZCode (Z.ai) Start Plan account
+        # as an OpenAI-compatible endpoint, which this plugin then registers
+        # into the gateway as a custom provider — so the ZCode models stay
+        # addressable through the gateway's own combos and fallbacks.
+        #
+        # `autoInstall` downloads the pinned zcode2api release from
+        # github.com/D3-vin/Zcode2Api, verifies its published SHA-256, and
+        # installs the captcha solver's Node packages on first activation.
+        # That project publishes no open-source license, so set
+        # `autoInstall: false` and point `executable` at your own build if you
+        # would rather not have this plugin fetch a third-party binary.
+        #
+        # Requires Node.js on PATH for the captcha solver, and a ZCode account:
+        # the account is read from the ZCode desktop app's credential store
+        # when `seedToken` is omitted.
+        #
+        # `authToken` is pushed into the proxy on every activation, because the
+        # proxy persists its password in SQLite and lets that stored value win
+        # over `.env`. If you change it, list the previous value under
+        # `legacyAuthTokens` so the plugin can migrate the stored key instead of
+        # being locked out.
+        zcode:
+          enabled: true
+          autoInstall: true
+          port: 3101
+          routeName: zcode
+          routePrefix: zcode
+          models:
+            - GLM-5.3-Flash
+          startupTimeoutMs: 60000
+          captchaTimeout: 60s
+          authToken: dsh-zcode-local

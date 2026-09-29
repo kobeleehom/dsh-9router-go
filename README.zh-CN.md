@@ -83,6 +83,44 @@ Dashboard 的初始密码保存在 `<DSH_HOME>/9router-go/initial-password`，�
 
 不要新增第二个 `llm-pi-ai` 条目：每个实例都会宣告完整的内置目录，两个实例会冲突，而且模型页面只会编辑 id 为 `llm-pi-ai` 的那个条目。停用插件会保留已注入的路由；不再需要时请在模型页面中删除它。
 
+### ZCode（GLM-5.3-Flash）账号
+
+ZCode（Z.ai）账号不是 OpenAI 兼容端点，网关无法直接对接。为此插件额外托管了第二个 sidecar：它拉起 [`zcode2api`](https://github.com/D3-vin/Zcode2Api)，把账号重新发布为一个 OpenAI 兼容端点，然后把该代理**注册进**网关，作为一个自定义提供商。之所以要经网关中转、而不是把代理直接暴露给 DSH，是为了让 ZCode 模型仍然能被网关自身的 combo 与 fallback 引用。
+
+本功能由本 bundle 的 patch 开启，首次运行无需任何手工配置。激活时插件会：
+
+1. 从 `D3-vin/Zcode2Api` 下载**锁定版本**的 `zcode2api` release 二进制，校验其发布的 SHA-256 与原生可执行文件头后才启用；
+2. 启动一次该代理，让它解压自己的验证码求解器，再用 `npm install` 装上求解器的 Node 依赖，然后重启它；
+3. 把该代理注册进网关成为一个自定义提供商（含下文列出的模型），再把网关路由发布给 DSH。
+
+请预期**首次激活约需一分钟**——25MB 下载加一次 `npm install`。之后的激活约一秒：二进制、依赖和数据目录都被复用，下载与安装都不会重复。
+
+仍有两个前提：**`PATH` 上要有 Node.js**（验证码求解器是一个 Node 程序），以及**一个 ZCode 账号**。未配置 `zcode.seedToken` 时，插件会从 ZCode 桌面端自己的凭据库读取（`~/.zcode/v2/credentials.json`，AES-256-GCM，密钥由 `ZCODE_CREDENTIAL_SECRET` 加上平台、家目录、用户名派生）。若该凭据库不存在，代理仍会以空的账号池启动，你可以通过它自己的后台（`http://127.0.0.1:<zcode.port>`）登录。
+
+注册完成后，模型以 `zcode/GLM-5.3-Flash` 的形式出现，并会被网关已鉴权的 `GET /v1/models` 列出。请预期**首次请求需要约 15–30 秒**：验证码求解器在 CDN 缓存冷启动时会停顿一次，重试才成功，这是它有文档记载的正常生命周期。之后的请求复用缓存参数，几秒内返回。
+
+```yaml
+- id: 9router-go
+  config:
+    zcode:
+      enabled: true
+      autoInstall: true
+      port: 3101
+      routeName: zcode
+      routePrefix: zcode
+      models:
+        - GLM-5.3-Flash
+      startupTimeoutMs: 60000
+      captchaTimeout: 60s
+      authToken: dsh-zcode-local
+```
+
+**关于许可与信任的说明。** `zcode2api` 没有发布任何开源许可证（其 README 写明 as-is，GitHub 报告 `license: null`）。因此 `zcode.autoInstall` 意味着**本插件会以你的用户身份下载并运行一个第三方二进制**。插件会校验 release 的 SHA-256 摘要与原生文件头，这能发现下载损坏或被替换，但**不等于签名验证或安全审计**。若要退出这一行为，把 `autoInstall` 设为 `false`，并用 `executable` 指向你自己编译的二进制；两个选项互斥，同时设置会被插件拒绝。
+
+`authToken` 是代理在 `/v1/*` 上要求的密码。它既写入代理的 `.env`，也在**每次激活时**通过代理的设置 API 推送一次：因为代理把密码持久化在 SQLite 里，且其自身的读取顺序让**存储值优先于 `.env`**——只写文件的话，网关连接会用代理早已不再接受的旧 key 去鉴权。如果你要更换 `authToken`，请把旧值列进 `legacyAuthTokens`，插件才能迁移那把存储的 key、而不会把自己锁在门外；插件会先试配置值，再逐个试遗留项，两者都不匹配时会明确报错。`routeName` 是提供商节点的唯一名称，正是靠它让重复重载只重新指向已有节点、而不新增重复项。`models` 声明代理对外暴露的模型——网关只从自己的存储里列出自定义模型，不会去探测自定义节点的 `/v1/models`，所以一个没有登记模型的节点，即使连接是 active 的，对客户端而言也是不可见的。
+
+有必要直说的已知限制。这本质上是在驱动一个第三方逆向出来的客户端流程，所以 ZCode 一旦改动验证码或身份校验，它就会失效，直到上游项目跟进；插件把这类失败当作**软失败**处理，记一条警告并让网关继续服务你的其他提供商。开发期间上游 `GLM-5.3` 返回 `529 Overloaded`，而 `GLM-5.3-Flash` 正常，因此该账号的**非 flash** 权益没有保证。
+
 ## 运行时配置与更新
 
 本 bundle 的条目 ID 是 `9router-go`。需要换端口或数据目录时，在 profile 的 `cordis.patch.yml` 中覆盖它的**整个** config：

@@ -85,6 +85,44 @@ Equivalently, in **Settings → Models** you can add a **Custom model API** prov
 
 Do not add a second `llm-pi-ai` entry: every instance advertises the whole installed catalog, so two collide, and the Models page only edits the entry whose id is `llm-pi-ai`. Disabling the plugin leaves an injected route in place; remove it from the Models page if you no longer want it.
 
+### ZCode (GLM-5.3-Flash) accounts
+
+A ZCode (Z.ai) account is not an OpenAI-compatible endpoint, so the gateway cannot speak to it directly. The plugin owns a second sidecar for this: it launches [`zcode2api`](https://github.com/D3-vin/Zcode2Api), which republishes the account as an OpenAI-compatible endpoint, and then registers that proxy **into** the gateway as a custom provider. Going through the gateway rather than exposing the proxy to DSH is what keeps the ZCode models addressable by the gateway's own combos and fallbacks.
+
+This is enabled by this bundle's patch and needs no manual setup on a first run. On activation the plugin:
+
+1. downloads the pinned `zcode2api` release binary from `D3-vin/Zcode2Api`, verifying its published SHA-256 and native executable header before publishing it;
+2. starts the proxy once so it unpacks its captcha solver, installs that solver's Node packages with `npm install`, and restarts it; and
+3. registers the proxy into the gateway as a custom provider with the models listed below, then publishes the gateway route to DSH.
+
+Expect the first activation to take roughly a minute — a 25 MB download plus one `npm install`. Later activations are about a second: the binary, its dependencies and its data directory are all reused, and neither download nor install repeats.
+
+Two prerequisites remain: **Node.js on `PATH`** (the captcha solver is a Node program) and **a ZCode account**. When `zcode.seedToken` is omitted the plugin reads the token from the ZCode desktop app's own credential store (`~/.zcode/v2/credentials.json`, AES-256-GCM under a key derived from `ZCODE_CREDENTIAL_SECRET` plus platform, home and user). If that store is absent the proxy still starts with an empty pool and you can sign in through its dashboard at `http://127.0.0.1:<zcode.port>`.
+
+Once registered, the models appear as `zcode/GLM-5.3-Flash` and are listed by the gateway's authenticated `GET /v1/models`. Expect the first request to take roughly 15–30 seconds: the captcha solver stalls once against a cold CDN cache and succeeds on retry, which is its documented normal lifecycle. Later requests reuse the cached parameter and answer in a few seconds.
+
+```yaml
+- id: 9router-go
+  config:
+    zcode:
+      enabled: true
+      autoInstall: true
+      port: 3101
+      routeName: zcode
+      routePrefix: zcode
+      models:
+        - GLM-5.3-Flash
+      startupTimeoutMs: 60000
+      captchaTimeout: 60s
+      authToken: dsh-zcode-local
+```
+
+**A note on licensing and trust.** `zcode2api` publishes no open-source license (its README says as-is, and GitHub reports `license: null`). `zcode.autoInstall` therefore has this plugin download and run a third-party binary under your user account. The plugin verifies the release SHA-256 digest and the native file header, which detects a corrupted or substituted download but is not a signature or a security audit. To opt out, set `autoInstall: false` and point `executable` at a build you produced yourself; the two options are mutually exclusive and the plugin refuses a configuration that sets both.
+
+`authToken` is the password the proxy requires on `/v1/*`. It is written into the proxy's `.env` **and** pushed through the proxy's settings API on every activation, because the proxy persists its password in SQLite and lets that stored value win over `.env` — seeding the file alone would leave the gateway connection authenticating with a key the proxy no longer accepts. If you change `authToken`, list the previous value under `legacyAuthTokens` so the plugin can migrate the stored key rather than being locked out; the plugin tries the configured value first, then each legacy entry, and reports a proxy whose password matches none of them. `routeName` is the provider node's unique name, which is how repeated reloads repoint the existing node instead of adding duplicates. `models` declares what the proxy exposes — the gateway lists custom models from its own store and does not probe a custom node's `/v1/models`, so a node with no registered model stays invisible to clients even though its connection is active.
+
+Known limitations worth stating plainly. This works by driving a third-party reverse-engineered client flow, so an upstream change to ZCode's captcha or identity checks breaks it until that project catches up; the plugin treats its failures as soft, logging a warning and leaving the gateway serving your other providers. Upstream `GLM-5.3` also answered `529 Overloaded` during development while `GLM-5.3-Flash` served normally, so the account's non-flash entitlement is not guaranteed.
+
 ## Runtime configuration and updates
 
 The bundle's entry ID is `9router-go`. Override its **whole** config in the profile's `cordis.patch.yml` if you need a different port or root directory:

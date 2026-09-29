@@ -8,3 +8,7 @@ coverage/
 repo.txt
 *.tgz
 .idea/
+
+# Managed ZCode proxy: the binary, its `.env`, and its SQLite pool all carry
+# live account material and are supplied per machine, never committed.
+zcode2api/

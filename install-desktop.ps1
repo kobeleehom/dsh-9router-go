@@ -232,3 +232,15 @@ if (Add-BundleSelection -ManifestPath (Join-Path $profile 'package.json') -Bundl
 Write-Host ''
 Write-Host "Installed $Package@$Version into the Desktop profile." -ForegroundColor Green
 Write-Host 'Restart DeepSeek Harness to load the plugin, then open the sidebar Plugins list to confirm it.'
+Write-Host ''
+# The ZCode proxy the plugin manages needs Node at runtime, and its absence
+# only surfaces as failing model requests later. Reporting it here turns a
+# confusing failure into a prerequisite the operator can satisfy now.
+$nodeOnPath = Get-Command node -ErrorAction SilentlyContinue
+if (-not $tool.Node -and -not $nodeOnPath) {
+  Write-Host 'Note: no Node.js was found on PATH.' -ForegroundColor Yellow
+  Write-Host 'The optional ZCode proxy needs it for its captcha solver; the 9router-go gateway alone does not.' -ForegroundColor Yellow
+} else {
+  Write-Host 'The managed ZCode proxy is enabled by default. On first start it downloads its pinned' -ForegroundColor DarkGray
+  Write-Host 'binary and installs its captcha solver packages, which takes about a minute.' -ForegroundColor DarkGray
+}
