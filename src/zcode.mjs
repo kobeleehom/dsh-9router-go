@@ -19,7 +19,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
@@ -117,9 +117,17 @@ export function resolveZcodeOptions(input = {}, fallbackRoot) {
     || models.some(model => typeof model !== 'string' || model.length === 0)) {
     throw new Error('zcode.models must be a non-empty list of model ids')
   }
+  // How long to wait for the bundled solver packages to appear. The proxy
+  // unpacks them in about ten seconds, but a cold start on a busy or scanned
+  // disk is slower, and giving up early is what turned a slow start into a
+  // failed one.
+  const solverReadyTimeoutMs = input.solverReadyTimeoutMs ?? 90000
+  if (!Number.isInteger(solverReadyTimeoutMs) || solverReadyTimeoutMs < 1000 || solverReadyTimeoutMs > 600000) {
+    throw new Error('zcode.solverReadyTimeoutMs must be 1000..600000')
+  }
   return {
     enabled, port, startupTimeoutMs, captchaTimeout, authToken, legacyAuthTokens,
-    routePrefix, routeName, models, autoInstall,
+    routePrefix, routeName, models, autoInstall, solverReadyTimeoutMs,
     rootDir: resolve(rootDir), executable: input.executable,
     nodePath: input.nodePath, seedToken: input.seedToken,
   }
@@ -171,23 +179,36 @@ export class ZcodeController {
   async initialize() {
     if (await this.#healthy()) {
       this.log.info?.(`zcode: reusing proxy already listening at ${this.endpoint}`)
+      // A reused proxy may have been started outside this plugin, or before a
+      // dependency fix, so the same check runs on both paths.
+      await this.#ensureSolverDependencies()
       await this.syncCredentials()
       return
     }
     const binary = await this.#resolveBinary()
     await this.#writeEnv()
     await this.#writeSeedToken()
+    await this.#clearInterruptedUnpack()
     await this.#launch(binary)
     await this.#awaitReady()
-    if (await this.#ensureSolverDependencies()) {
-      // The solver was unpacked by this launch and its packages were just
-      // added, so the running process has no working solver yet. One restart
-      // is cheaper than leaving every request to fail at mint time.
-      await this.#stop()
-      await this.#launch(binary)
-      await this.#awaitReady()
-    }
+    // The published release embeds the solver's packages, so this normally
+    // finds them unpacked within seconds; it installs only when a build omits
+    // them. No restart follows: the proxy spawns `node solver.js` per solve, so
+    // packages added later are picked up by the next request.
+    await this.#ensureSolverDependencies()
     await this.syncCredentials()
+  }
+
+  /**
+   * Remove the unpack staging a previous run left behind.
+   *
+   * The proxy extracts the solver into `captcha_node.tmp` and renames it once
+   * complete, so an interrupted run leaves that directory where the next launch
+   * would extract over it.
+   */
+  async #clearInterruptedUnpack() {
+    const staging = join(this.options.rootDir, 'data', 'captcha_node.tmp')
+    await rm(staging, { recursive: true, force: true })
   }
 
   /**
@@ -285,26 +306,27 @@ export class ZcodeController {
   }
 
   /**
-   * Install the captcha solver's Node packages when the proxy unpacked without
-   * them.
+   * Make sure the captcha solver's Node packages are present.
    *
-   * The proxy extracts `solver.js` on first start but not its dependencies, so
-   * this probes after that start and installs once. A machine with no npm is
-   * reported rather than silently degraded, because every request would
-   * otherwise fail later at mint time with a less obvious error.
-   * @returns whether packages were installed, so the caller can restart.
-   * @throws when the solver directory never appears or npm fails.
+   * The published release embeds them, so the normal path is a short wait for
+   * the proxy to finish unpacking: `node_modules/happy-dom` is the marker,
+   * because that package is what the solver's browser emulation imports. The
+   * `npm install` below is a fallback for a build that omits them, and it is
+   * deliberately non-fatal — a proxy without a working solver still serves its
+   * dashboard, and failing here would discard the gateway's other providers.
+   *
+   * The unpack takes about ten seconds on a cold start (the proxy extracts to
+   * `captcha_node.tmp` and renames), and longer while a virus scanner inspects
+   * the freshly downloaded 25 MB binary, so the deadline is generous.
+   * @returns whether packages had to be installed.
+   * @throws when a fallback install is attempted and fails.
    */
   async #ensureSolverDependencies() {
     const solverDir = await solverDirectory(this.options.rootDir)
-    const deadline = Date.now() + 15000
-    while (!await fileExists(join(solverDir, 'package.json'))) {
-      if (Date.now() > deadline) {
-        throw new Error(`zcode: the proxy never unpacked its captcha solver into ${solverDir}`)
-      }
-      await delay(500)
-    }
-    const result = await installSolverDependencies({
+    const marker = join(solverDir, 'node_modules', 'happy-dom', 'package.json')
+    if (await this.#awaitSolverPackages(marker)) return { installed: false }
+    this.log.warn?.('zcode: the proxy did not unpack its solver packages; attempting an npm install')
+    return installSolverDependencies({
       solverDir,
       nodePath: this.options.nodePath ?? 'node',
       npmCliPath: this.npmCliPath,
@@ -313,7 +335,16 @@ export class ZcodeController {
       timeoutMs: this.options.solverInstallTimeoutMs,
       log: this.log,
     })
-    return result.installed
+  }
+
+  /** Poll for the solver's marker file until the deadline. */
+  async #awaitSolverPackages(marker) {
+    const deadline = Date.now() + this.options.solverReadyTimeoutMs
+    while (Date.now() < deadline) {
+      if (await fileExists(marker)) return true
+      await delay(500)
+    }
+    return false
   }
 
   /**
