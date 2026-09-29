@@ -12,3 +12,6 @@ repo.txt
 # Managed ZCode proxy: the binary, its `.env`, and its SQLite pool all carry
 # live account material and are supplied per machine, never committed.
 zcode2api/
+
+# Scratch file for multi-line commit messages on Windows.
+.commit-msg.txt
