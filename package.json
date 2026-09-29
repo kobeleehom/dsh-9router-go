@@ -1,6 +1,6 @@
 {
   "name": "dsh-9router-go",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Run the 9router-go gateway as a managed DSH sidecar and publish it as a DSH model provider",
   "type": "module",
   "repository": {
@@ -16,7 +16,7 @@
   },
   "main": "./index.js",
   "bin": {
-    "dsh-9router-go": "./bin/dsh-9router-go.mjs"
+    "dsh-9router-go": "bin/dsh-9router-go.mjs"
   },
   "exports": {
     ".": "./index.js",
