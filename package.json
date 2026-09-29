@@ -30,6 +30,7 @@
     "src/",
     "cordis.patch.yml",
     "README.md",
+    "README.zh-CN.md",
     "INSTALL-DESKTOP.md",
     "install-desktop.ps1",
     "LICENSE"

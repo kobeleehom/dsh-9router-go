@@ -1,5 +1,7 @@
 # 9router-go for DeepSeek Harness
 
+English | [简体中文](README.zh-CN.md)
+
 Independent DSH bundle: starts the unmodified [9router-go](https://github.com/luqman-v1/9router-go) executable as a loopback-only sidecar, verifies upstream GitHub Release downloads and optionally follows new releases. The upstream executable and its Dashboard are **not included** in this package.
 
 ## Licensing and trust
