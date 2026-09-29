@@ -4,32 +4,64 @@
 
 独立的 DSH bundle：把未经修改的 [9router-go](https://github.com/luqman-v1/9router-go) 可执行文件作为仅监听回环地址的 sidecar 启动，校验上游 GitHub Release 下载内容，并可选地跟随新版本。**本包不包含**上游可执行文件及其 Dashboard。
 
-## 许可与信任
+> ⚠️ **使用前请先读[许可与信任](#许可与信任)**：上游没有 LICENSE，且插件会下载并运行上游**未签名**的可执行文件。这不是形式条款，关系到你是否应该使用这个包。
 
-开发期核对的结果：上游仓库没有 `LICENSE` 文件，GitHub 报告 `license: null`。它最初参考的 `decolua/9router` 采用 MIT，**并不**因此为这个 Go 实现确立许可。未经版权持有者许可，不要连同本 bundle 再分发上游可执行文件。启用 `autoInstall` 会有意在你的账号下下载并运行上游**未签名**的可执行文件；插件会校验其 GitHub Release 的 SHA-256 摘要与原生文件头，但这不能替代代码签名或安全审计。只有在你能接受上游项目的代码、各提供方条款及其许可影响时再使用。
+---
 
 ## 安装
 
-**桌面端用户请阅读 [INSTALL-DESKTOP.md](INSTALL-DESKTOP.md)**：Desktop 应用独占自己的 profile，`dsh` CLI 无法在其中安装，需要用它的 Plugins 页面或随包提供的安装脚本。
+三种方式，任选其一。**桌面端不要用 `dsh plugin`**——原因见下方说明。
 
-从 DSH 源码检出安装到已有的 Web profile（或由 `web` 模板新建的一次性 profile）：
+### 方式一：npx 一键安装（推荐，桌面端）
+
+```powershell
+npx --yes dsh-9router-go install-desktop
+```
+
+来自公开 npm，**无需任何凭据**。它会用 Desktop 自带的 Node 与 pnpm 把插件装进 profile、并把 bundle 设为启用。装完**重启 DeepSeek Harness**。
+
+### 方式二：DSH Desktop 的 Plugins 页面
+
+左侧栏 → **Plugins** → 安装 `dsh-9router-go` → 确认该 bundle 处于启用状态。等效于方式一，适合习惯图形界面的人。
+
+### 方式三：从源码安装（开发调试用）
+
+```powershell
+git clone https://github.com/kobeleehom/dsh-9router-go
+cd dsh-9router-go
+npm run check          # 21 项测试
+```
+
+Web profile 从源码安装：
 
 ```powershell
 pnpm dsh plugin --profile web add ..\dsh-9router-go
 pnpm dsh --profile web --dump-config
 ```
 
-独立的 DSH CLI 安装可以针对源码检出使用 `dsh plugin --profile web add <插件绝对路径>`；包发布到该安装所解析的源之后，也可以用 `dsh plugin --profile web add dsh-9router-go`。本地链接的包只有在新增运行时导入时才需要自己的依赖；本 bundle 只用 Node 标准库加上宿主提供的 `subprocess` 服务。
-
-### 桌面端
-
-Desktop 应用独占 `$DSH_HOME/profiles/desktop`，`dsh --profile desktop` 会拒绝所有命令，包括 `dsh plugin`（[`args.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/main/apps/cli/src/args.ts)）。请通过应用的 **Plugins** 页面安装，或运行随包提供的安装脚本——它对 profile 目录做的是同一件事：
+桌面端从源码安装（Desktop 独占自己的 profile，CLI 无法管理）：
 
 ```powershell
-npx --yes dsh-9router-go install-desktop
+powershell -ExecutionPolicy Bypass -File .\install-desktop.ps1
 ```
 
-两种方式都不会改动机器级的 npm 配置。细节（包括从本地检出安装、以及指向私有 registry）见 [INSTALL-DESKTOP.md](INSTALL-DESKTOP.md)。
+### 为什么桌面端不能用 `dsh plugin`
+
+Desktop 应用独占 `$DSH_HOME/profiles/desktop`，`dsh --profile desktop` 会**拒绝所有命令**，包括 `dsh plugin`（[`args.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/main/apps/cli/src/args.ts)）。所以桌面端只能走 Plugins 页面或安装脚本——两者做的是同一件事：对 profile 目录执行 pnpm 安装并选中 bundle。
+
+详见 [INSTALL-DESKTOP.md](INSTALL-DESKTOP.md)。
+
+### 装完怎么用
+
+用 `/9router-go` 命令打开 Dashboard（Desktop 上会加载到侧栏 Browser），或直接访问 `http://127.0.0.1:20130`。模型提供商由插件**自动注入**，无需手配——见[接入 DSH 模型](#接入-dsh-模型)。
+
+---
+
+## 许可与信任
+
+开发期核对的结果：上游仓库没有 `LICENSE` 文件，GitHub 报告 `license: null`。它最初参考的 `decolua/9router` 采用 MIT，**并不**因此为这个 Go 实现确立许可。未经版权持有者许可，不要连同本 bundle 再分发上游可执行文件。启用 `autoInstall` 会有意在你的账号下下载并运行上游**未签名**的可执行文件；插件会校验其 GitHub Release 的 SHA-256 摘要与原生文件头，但这不能替代代码签名或安全审计。只有在你能接受上游项目的代码、各提供方条款及其许可影响时再使用。
+
+## 使用要点
 
 照常启动该 profile。用 `/9router-go` 命令打开 Dashboard——在 Desktop 上它会加载到侧栏 Browser；也可以直接访问 `http://127.0.0.1:20130`。Desktop 默认挂载该 Browser 标签类型，Web profile 不挂载，因此该命令在 Web 下会显示为不可用。Dashboard 里的 OAuth、下载与弹窗仍然需要系统浏览器。
 

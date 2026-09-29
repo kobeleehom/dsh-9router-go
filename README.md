@@ -4,38 +4,72 @@ English | [简体中文](README.zh-CN.md)
 
 Independent DSH bundle: starts the unmodified [9router-go](https://github.com/luqman-v1/9router-go) executable as a loopback-only sidecar, verifies upstream GitHub Release downloads and optionally follows new releases. The upstream executable and its Dashboard are **not included** in this package.
 
-## Licensing and trust
+> ⚠️ **Read [Licensing and trust](#licensing-and-trust) before use**: upstream has no LICENSE, and the plugin downloads and runs upstream's **unsigned** executable. That is a real risk, not boilerplate.
 
-As checked during development, the upstream repository has no `LICENSE` file and GitHub reports `license: null`. Its original inspiration `decolua/9router` being MIT does **not** establish a license for the Go implementation. Do not redistribute the upstream executable with this bundle without permission from its copyright holders. Enabling `autoInstall` deliberately downloads and runs upstream's unsigned executable under your user account; the plugin verifies its GitHub Release SHA-256 digest and native file header, but this does not replace a signature or security audit. Only use it if you accept the upstream project's code, provider terms and licensing implications.
+---
 
 ## Install
 
-**Desktop users should follow [INSTALL-DESKTOP.md](INSTALL-DESKTOP.md)**: the Desktop application owns its profile, so the `dsh` CLI cannot install there and the Plugins page (or the bundled installer) does it instead.
+Three routes; pick one. **Do not use `dsh plugin` for Desktop** — see below.
 
-From a DSH source checkout, install into an existing Web profile (or a disposable profile created from `web`):
+### Route 1: npx (recommended, Desktop)
+
+```powershell
+npx --yes dsh-9router-go install-desktop
+```
+
+From public npm, **no credentials needed**. It uses the Node and pnpm the Desktop application ships to install into the profile and select the bundle. **Restart DeepSeek Harness** afterwards.
+
+### Route 2: the Desktop Plugins page
+
+Sidebar → **Plugins** → install `dsh-9router-go` → confirm the bundle is enabled. Equivalent to Route 1, for anyone who prefers the GUI.
+
+### Route 3: from source (development)
+
+```powershell
+git clone https://github.com/kobeleehom/dsh-9router-go
+cd dsh-9router-go
+npm run check          # 21 tests
+```
+
+Into a Web profile:
 
 ```powershell
 pnpm dsh plugin --profile web add ..\dsh-9router-go
 pnpm dsh --profile web --dump-config
 ```
 
-A separate DSH CLI installation can use `dsh plugin --profile web add <absolute-plugin-directory>` for a checkout, or `dsh plugin --profile web add dsh-9router-go` once the package is published to the registry that installation resolves. Local linked packages need their own dependencies only if you add new runtime imports; this bundle uses Node's standard library plus the Host `subprocess` service.
-
-### Desktop
-
-The Desktop application owns `$DSH_HOME/profiles/desktop` exclusively, and `dsh --profile desktop` refuses every command, including `dsh plugin` ([`args.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/main/apps/cli/src/args.ts)). Install through the application's **Plugins** page, or run the bundled installer, which does the same thing against the profile directory:
+For Desktop from a checkout (Desktop owns its profile, so the CLI cannot manage it):
 
 ```powershell
-npx --yes dsh-9router-go install-desktop
+powershell -ExecutionPolicy Bypass -File .\install-desktop.ps1
 ```
 
-Both routes leave the machine-global npm configuration alone. [INSTALL-DESKTOP.md](INSTALL-DESKTOP.md) documents the details, including installing a local checkout and targeting a private registry.
+### Why Desktop cannot use `dsh plugin`
+
+The Desktop application owns `$DSH_HOME/profiles/desktop` exclusively, and `dsh --profile desktop` **refuses every command**, including `dsh plugin` ([`args.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/main/apps/cli/src/args.ts)). Desktop therefore goes through the Plugins page or the installer script — both do the same thing: run pnpm against the profile directory and select the bundle.
+
+See [INSTALL-DESKTOP.md](INSTALL-DESKTOP.md) for the details.
+
+### After installing
+
+Open the Dashboard with the `/9router-go` command (it loads in the sidebar Browser on Desktop), or browse to `http://127.0.0.1:20130`. The model provider is **injected automatically** — see [Connect DSH models](#connect-dsh-models).
+
+---
+
+## Licensing and trust
+
+As checked during development, the upstream repository has no `LICENSE` file and GitHub reports `license: null`. Its original inspiration `decolua/9router` being MIT does **not** establish a license for the Go implementation. Do not redistribute the upstream executable with this bundle without permission from its copyright holders. Enabling `autoInstall` deliberately downloads and runs upstream's unsigned executable under your user account; the plugin verifies its GitHub Release SHA-256 digest and native file header, but this does not replace a signature or security audit. Only use it if you accept the upstream project's code, provider terms and licensing implications.
+
+## Usage notes
 
 Run the profile as usual. Open the Dashboard with the `/9router-go` command, which loads it in the sidebar Browser on Desktop, or browse to `http://127.0.0.1:20130` directly. Desktop mounts that Browser tab type by default; Web profiles do not, so the command reports itself unavailable there. OAuth, downloads, and popups in the Dashboard still need a system browser.
 
 The browser boot row carries no plugin configuration, so the command's target address is the `DASHBOARD_URL` constant in `client.js`. Changing `port` therefore also requires editing that one line; DSH logs a warning when the configured port differs from it.
 
 The initial Dashboard password is stored at `<DSH_HOME>/9router-go/initial-password` and is never printed in logs. Change it in the Dashboard after first login.
+
+A separate DSH CLI installation can use `dsh plugin --profile web add <absolute-plugin-directory>` for a checkout, or `dsh plugin --profile web add dsh-9router-go` when the registry it resolves serves the package. Local linked packages need their own dependencies only if you add new runtime imports; this bundle uses Node's standard library plus the Host `subprocess` service.
 
 ### Connect DSH models
 

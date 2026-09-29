@@ -193,12 +193,14 @@ Write-Host "installing $Package@$Version"
 # machine's own npm configuration still applies.
 if ($Token) {
   if (-not $Registry) { throw '-Token needs -Registry: a token cannot be stored without the registry it authenticates to.' }
+  # npm addresses a credential as `//host/path/:key`; dropping the scheme from
+  # the registry URL already leaves exactly those two leading slashes.
   $authority = $Registry -replace '^https?:', ''
   if (-not $authority.EndsWith('/')) { $authority += '/' }
   $npmrc = Join-Path $profile '.npmrc'
   @(
     "registry=$Registry"
-    "//${authority}:_authToken=$Token"
+    "${authority}:_authToken=$Token"
   ) | Set-Content $npmrc -Encoding ascii
   Write-Host "registry configured for this profile only: $npmrc"
 } elseif ($Registry) {
