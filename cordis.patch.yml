@@ -1,0 +1,22 @@
+- insert:
+    - id: 9router-go
+      name: dsh-9router-go
+      config:
+        port: 20130
+        autoInstall: true
+        autoUpdate: false
+        checkIntervalHours: 6
+        startupTimeoutMs: 30000
+        shutdownGraceMs: 5000
+        # Publish the gateway as a DSH model provider on first activation. The
+        # route is appended to the existing `llm-pi-ai` providers (settings
+        # writes deep-merge), so providers configured here keep serving.
+        provider:
+          autoInject: true
+          routeName: 9router-go
+          settingsNamespace: llm-pi-ai
+          apiKeyEnv: NINEROUTER_GO_API_KEY
+          keyName: dsh-9router-go
+          maxModels: 40
+          inputModalities:
+            - text

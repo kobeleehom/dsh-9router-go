@@ -1,0 +1,66 @@
+{
+  "name": "dsh-9router-go",
+  "version": "0.3.0",
+  "description": "Run the 9router-go gateway as a managed DSH sidecar and publish it as a DSH model provider",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kobeleehom/dsh-9router-go.git"
+  },
+  "homepage": "https://github.com/kobeleehom/dsh-9router-go#readme",
+  "bugs": {
+    "url": "https://github.com/kobeleehom/dsh-9router-go/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "main": "./index.js",
+  "bin": {
+    "dsh-9router-go": "./bin/dsh-9router-go.mjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "bin/",
+    "src/",
+    "cordis.patch.yml",
+    "README.md",
+    "INSTALL-DESKTOP.md",
+    "install-desktop.ps1",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "9router",
+    "llm-gateway",
+    "sidecar"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-subprocess": ">=0.1.7-rc.2"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:live": "node tests/live-smoke.mjs",
+    "check": "node --check index.js && node --check client.js && node --check bin/dsh-9router-go.mjs && node --check src/release.mjs && node --check src/controller.mjs && node --check src/provision.mjs && npm test"
+  },
+  "license": "MIT"
+}
